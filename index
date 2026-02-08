@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>酸化還元マスター | Oxidation Master</title>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Firebase SDKs (Modular) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getAuth, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, getDocs, updateDoc, query, where, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+        // ==========================================
+        // CONFIGURATION: ここをご自身のFirebase設定に書き換えてください
+        // ==========================================
+        const firebaseConfig = {
+          apiKey: "AIzaSyDiWnI_xkdwSnTL36AJm1e1OLcOugaBdWk",
+          authDomain: "redox-game.firebaseapp.com",
+          projectId: "redox-game",
+          storageBucket: "redox-game.firebasestorage.app",
+          messagingSenderId: "792171243217",
+          appId: "1:792171243217:web:e361fbfcc1110585a107f0"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const provider = new GoogleAuthProvider();
+
+        // Global access for React
+        window.db = db;
+        window.auth = auth;
+        window.provider = provider;
+        window.signInWithPopup = signInWithPopup;
+        window.signOut = signOut;
+        window.doc = doc;
+        window.setDoc = setDoc;
+        window.getDoc = getDoc;
+        window.updateDoc = updateDoc;
+        window.collection = collection;
+        window.getDocs = getDocs;
+        window.serverTimestamp = serverTimestamp;
+    </script>
+
+    <style>
+        body { font-family: 'Noto Sans JP', sans-serif; background-color: #f3f4f6; }
+        .chemical-formula { font-family: 'Times New Roman', serif; letter-spacing: 1px; }
+        .sub { vertical-align: sub; font-size: 0.7em; }
+        .sup { vertical-align: super; font-size: 0.7em; }
+        /* Simple spinner */
+        .loader { border: 4px solid #f3f3f3; border-radius: 50%; border-top: 4px solid #3b82f6; width: 24px; height: 24px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        /* スタンプ用アニメーション */
+        .stamp-appear { animation: stamp-pop 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; opacity: 0; transform: scale(0.5) rotate(-15deg); }
+        @keyframes stamp-pop { 
+            0% { opacity: 0; transform: scale(0.5) rotate(-15deg); } 
+            100% { opacity: 1; transform: scale(1) rotate(0deg); } 
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // ==========================================
+        // DATA: 問題データベース
+        // ==========================================
+        
+        // Part 1: 酸化数決定
+        const oxNumQuestions = [
+            { id: "1-01", formula: "\\text{H}_2", target: "H", answer: "0", note: "単体" },
+            { id: "1-02", formula: "\\text{O}_2", target: "O", answer: "0", note: "単体" },
+            { id: "1-03", formula: "\\text{Cu}", target: "Cu", answer: "0", note: "単体" },
+            { id: "1-04", formula: "\\text{Fe}", target: "Fe", answer: "0", note: "単体" },
+            { id: "1-05", formula: "\\text{Al}", target: "Al", answer: "0", note: "単体" },
+            { id: "1-06", formula: "\\text{H}_2\\text{O}", target: "H", answer: "+1", note: "一般" },
+            { id: "1-07", formula: "\\text{H}_2\\text{O}", target: "O", answer: "-2", note: "一般" },
+            { id: "1-08", formula: "\\text{NH}_3", target: "H", answer: "+1", note: "一般" },
+            { id: "1-09", formula: "\\text{NH}_3", target: "N", answer: "-3", note: "一般" },
+            { id: "1-10", formula: "\\text{CH}_4", target: "C", answer: "-4", note: "一般" },
+            { id: "1-11", formula: "\\text{CO}_2", target: "C", answer: "+4", note: "一般" },
+            { id: "1-12", formula: "\\text{CO}_2", target: "O", answer: "-2", note: "一般" },
+            { id: "1-13", formula: "\\text{HCl}", target: "Cl", answer: "-1", note: "一般" },
+            { id: "1-14", formula: "\\text{NaCl}", target: "Na", answer: "+1", note: "アルカリ金属" },
+            { id: "1-15", formula: "\\text{NaCl}", target: "Cl", answer: "-1", note: "一般" },
+            { id: "1-16", formula: "\\text{MgO}", target: "Mg", answer: "+2", note: "アルカリ土類金属" },
+            { id: "1-17", formula: "\\text{Al}_2\\text{O}_3", target: "Al", answer: "+3", note: "一般" },
+            { id: "1-18", formula: "\\text{CuCl}_2", target: "Cu", answer: "+2", note: "一般" },
+            { id: "1-19", formula: "\\text{Fe}_2\\text{O}_3", target: "Fe", answer: "+3", note: "一般" },
+            { id: "1-20", formula: "\\text{FeCl}_2", target: "Fe", answer: "+2", note: "一般" },
+            { id: "1-21", formula: "\\text{HNO}_3", target: "N", answer: "+5", note: "酸" },
+            { id: "1-22", formula: "\\text{H}_2\\text{SO}_4", target: "S", answer: "+6", note: "酸" },
+            { id: "1-23", formula: "\\text{H}_2\\text{S}", target: "S", answer: "-2", note: "一般" },
+            { id: "1-24", formula: "\\text{SO}_2", target: "S", answer: "+4", note: "一般" },
+            { id: "1-25", formula: "\\text{H}_2\\text{SO}_3", target: "S", answer: "+4", note: "酸" },
+            { id: "1-26", formula: "\\text{HClO}", target: "Cl", answer: "+1", note: "次亜塩素酸" },
+            { id: "1-27", formula: "\\text{HClO}_3", target: "Cl", answer: "+5", note: "塩素酸" },
+            { id: "1-28", formula: "\\text{KMnO}_4", target: "Mn", answer: "+7", note: "重要酸化剤" },
+            { id: "1-29", formula: "\\text{K}_2\\text{Cr}_2\\text{O}_7", target: "Cr", answer: "+6", note: "重要酸化剤" },
+            { id: "1-30", formula: "\\text{MnO}_2", target: "Mn", answer: "+4", note: "一般" },
+            { id: "1-31", formula: "\\text{NO}_2", target: "N", answer: "+4", note: "一般" },
+            { id: "1-32", formula: "\\text{NO}", target: "N", answer: "+2", note: "一般" },
+            { id: "1-33", formula: "\\text{H}_2\\text{O}_2", target: "O", answer: "-1", note: "例外 (過酸化物)" },
+            { id: "1-34", formula: "\\text{NaH}", target: "H", answer: "-1", note: "例外 (金属水素化物)" },
+            { id: "1-35", formula: "\\text{CaH}_2", target: "H", answer: "-1", note: "例外 (金属水素化物)" },
+            { id: "1-36", formula: "\\text{NH}_4^+", target: "N", answer: "-3", note: "多原子イオン" },
+            { id: "1-37", formula: "\\text{SO}_4^{2-}", target: "S", answer: "+6", note: "多原子イオン" },
+            { id: "1-38", formula: "\\text{NO}_3^-", target: "N", answer: "+5", note: "多原子イオン" },
+            { id: "1-39", formula: "\\text{MnO}_4^-", target: "Mn", answer: "+7", note: "多原子イオン" },
+            { id: "1-40", formula: "\\text{Cr}_2\\text{O}_7^{2-}", target: "Cr", answer: "+6", note: "多原子イオン" },
+            { id: "1-41", formula: "\\text{PO}_4^{3-}", target: "P", answer: "+5", note: "多原子イオン" },
+            { id: "1-42", formula: "\\text{OH}^-", target: "O", answer: "-2", note: "多原子イオン" },
+            { id: "1-43", formula: "\\text{Cu}_2\\text{O}", target: "Cu", answer: "+1", note: "一般" },
+            { id: "1-44", formula: "\\text{SnCl}_2", target: "Sn", answer: "+2", note: "一般" },
+            { id: "1-45", formula: "\\text{SnCl}_4", target: "Sn", answer: "+4", note: "一般" },
+            { id: "1-46", formula: "\\text{O}_3", target: "O", answer: "0", note: "単体（オゾン）" },
+            { id: "1-47", formula: "\\text{PbO}_2", target: "Pb", answer: "+4", note: "一般" },
+            { id: "1-48", formula: "\\text{FeSO}_4", target: "Fe", answer: "+2", note: "塩" },
+            { id: "1-49", formula: "\\text{Na}_2\\text{S}_2\\text{O}_3", target: "S", answer: "+2", note: "チオ硫酸（平均）" },
+            { id: "1-50", formula: "\\text{C}_2\\text{H}_6\\text{O}", target: "C", answer: "-2", note: "有機物（平均）" }
+        ];
+
+        // Part 2: 酸化還元反応
+        const redoxQuestions = [
+            { id: "2-01", eq: "2\\text{Cu} + \\text{O}_2 \\to 2\\text{CuO}", q: "酸化された物質は？", a: "Cu", exp: "Cu (0 → +2)" },
+            { id: "2-02", eq: "2\\text{Cu} + \\text{O}_2 \\to 2\\text{CuO}", q: "酸化剤は？", a: "O2", exp: "相手を酸化した" },
+            { id: "2-03", eq: "\\text{CuO} + \\text{H}_2 \\to \\text{Cu} + \\text{H}_2\\text{O}", q: "還元された物質は？", a: "CuO", exp: "Cu (+2 → 0)" },
+            { id: "2-04", eq: "\\text{CuO} + \\text{H}_2 \\to \\text{Cu} + \\text{H}_2\\text{O}", q: "還元剤は？", a: "H2", exp: "相手を還元した" },
+            { id: "2-05", eq: "2\\text{Mg} + \\text{CO}_2 \\to 2\\text{MgO} + \\text{C}", q: "酸化剤は？", a: "CO2", exp: "Cが+4→0に還元された" },
+            { id: "2-06", eq: "2\\text{Mg} + \\text{CO}_2 \\to 2\\text{MgO} + \\text{C}", q: "酸化された物質は？", a: "Mg", exp: "Mg (0 → +2)" },
+            { id: "2-07", eq: "\\text{Fe} + \\text{S} \\to \\text{FeS}", q: "還元剤は？", a: "Fe", exp: "電子を放出した" },
+            { id: "2-08", eq: "2\\text{Na} + \\text{Cl}_2 \\to 2\\text{NaCl}", q: "酸化剤は？", a: "Cl2", exp: "電子を受け取った" },
+            { id: "2-09", eq: "\\text{Zn} + 2\\text{HCl} \\to \\text{ZnCl}_2 + \\text{H}_2", q: "酸化された物質は？", a: "Zn", exp: "Zn (0 → +2)" },
+            { id: "2-10", eq: "\\text{Zn} + 2\\text{HCl} \\to \\text{ZnCl}_2 + \\text{H}_2", q: "還元された物質は？", a: "HCl", exp: "Hが+1→0" },
+            { id: "2-11", eq: "\\text{H}_2\\text{S} + \\text{I}_2 \\to \\text{S} + 2\\text{HI}", q: "酸化剤は？", a: "I2", exp: "I (0 → -1)" },
+            { id: "2-12", eq: "\\text{H}_2\\text{S} + \\text{I}_2 \\to \\text{S} + 2\\text{HI}", q: "還元剤は？", a: "H2S", exp: "S (-2 → 0)" },
+            { id: "2-13", eq: "\\text{SO}_2 + 2\\text{H}_2\\text{S} \\to 3\\text{S} + 2\\text{H}_2\\text{O}", q: "酸化剤は？", a: "SO2", exp: "S (+4 → 0)" },
+            { id: "2-14", eq: "\\text{SO}_2 + 2\\text{H}_2\\text{S} \\to 3\\text{S} + 2\\text{H}_2\\text{O}", q: "還元剤は？", a: "H2S", exp: "S (-2 → 0)" },
+            { id: "2-15", eq: "\\text{SO}_2 + \\text{H}_2\\text{O}_2 \\to \\text{H}_2\\text{SO}_4", q: "還元剤は？", a: "SO2", exp: "S (+4 → +6)" },
+            { id: "2-16", eq: "\\text{SO}_2 + \\text{H}_2\\text{O}_2 \\to \\text{H}_2\\text{SO}_4", q: "酸化剤は？", a: "H2O2", exp: "O (-1 → -2)" },
+            { id: "2-17", eq: "2\\text{KI} + \\text{Cl}_2 \\to 2\\text{KCl} + \\text{I}_2", q: "酸化剤は？", a: "Cl2", exp: "ハロゲンの酸化力" },
+            { id: "2-18", eq: "2\\text{FeCl}_2 + \\text{Cl}_2 \\to 2\\text{FeCl}_3", q: "酸化された物質は？", a: "FeCl2", exp: "Fe (+2 → +3)" },
+            { id: "2-19", eq: "\\text{MnO}_2 + 4\\text{HCl} \\to \\text{MnCl}_2 + 2\\text{H}_2\\text{O} + \\text{Cl}_2", q: "酸化剤は？", a: "MnO2", exp: "Mn (+4 → +2)" },
+            { id: "2-20", eq: "\\text{MnO}_2 + 4\\text{HCl} \\to \\text{MnCl}_2 + 2\\text{H}_2\\text{O} + \\text{Cl}_2", q: "還元剤は？", a: "HCl", exp: "Cl (-1 → 0)" },
+            { id: "2-21", eq: "\\text{Cu} + 4\\text{HNO}_3 \\to \\text{Cu}(\\text{NO}_3)_2 + 2\\text{NO}_2 + 2\\text{H}_2\\text{O}", q: "酸化剤は？", a: "HNO3", exp: "N (+5 → +4)" },
+            { id: "2-22", eq: "\\text{SnCl}_2 + 2\\text{FeCl}_3 \\to \\text{SnCl}_4 + 2\\text{FeCl}_2", q: "還元剤は？", a: "SnCl2", exp: "Sn (+2 → +4)" },
+            { id: "2-23", eq: "\\text{SnCl}_2 + 2\\text{FeCl}_3 \\to \\text{SnCl}_4 + 2\\text{FeCl}_2", q: "酸化剤は？", a: "FeCl3", exp: "Fe (+3 → +2)" },
+            { id: "2-24", eq: "2\\text{Na} + 2\\text{H}_2\\text{O} \\to 2\\text{NaOH} + \\text{H}_2", q: "酸化された物質は？", a: "Na", exp: "Na (0 → +1)" },
+            { id: "2-25", eq: "2\\text{Na} + 2\\text{H}_2\\text{O} \\to 2\\text{NaOH} + \\text{H}_2", q: "酸化剤は？", a: "H2O", exp: "水のHが還元された" },
+            { id: "2-26", eq: "2\\text{Al} + \\text{Fe}_2\\text{O}_3 \\to \\text{Al}_2\\text{O}_3 + 2\\text{Fe}", q: "還元剤は？", a: "Al", exp: "テルミット反応" },
+            { id: "2-27", eq: "\\text{CH}_4 + 2\\text{O}_2 \\to \\text{CO}_2 + 2\\text{H}_2\\text{O}", q: "還元された物質は？", a: "O2", exp: "燃焼は酸化反応" },
+            { id: "2-28", eq: "5\\text{H}_2\\text{O}_2 + 2\\text{KMnO}_4 + 3\\text{H}_2\\text{SO}_4 \\dots", q: "還元剤は？", a: "H2O2", exp: "KMnO4相手なら還元剤" },
+            { id: "2-29", eq: "\\text{H}_2\\text{O}_2 + 2\\text{KI} + \\text{H}_2\\text{SO}_4 \\dots", q: "酸化剤は？", a: "H2O2", exp: "KI相手なら酸化剤" },
+            { id: "2-30", eq: "\\text{Cl}_2 + \\text{H}_2\\text{O} \\rightleftharpoons \\text{HCl} + \\text{HClO}", q: "酸化剤かつ還元剤？", a: "Cl2", exp: "自己酸化還元反応" }
+        ];
+
+        // ==========================================
+        // COMPONENTS: UIコンポーネント
+        // ==========================================
+
+        // 化学式レンダラー (簡易版)
+        const Formula = ({ text }) => {
+            if (!text) return null;
+            // \text{}の除去, _数字 の下付き化, ^数字 の上付き化
+            // 注意: 厳密なLaTeXパーサーではないが、今回のデータセットには十分
+            let html = text.replace(/\\text\{([^}]+)\}/g, '$1');
+            html = html.replace(/_(\{[^}]+\}|\d+)/g, (match, p1) => {
+                const content = p1.replace(/\{|\}/g, '');
+                return `<sub>${content}</sub>`;
+            });
+            html = html.replace(/\^(\{[^}]+\}|\d+|\S)/g, (match, p1) => { // ^- や ^2- などに対応
+                const content = p1.replace(/\{|\}/g, '');
+                return `<sup>${content}</sup>`;
+            });
+            html = html.replace(/\\to/g, '→').replace(/\\rightleftharpoons/g, '⇄').replace(/\\dots/g, '…');
+            
+            return <span className="chemical-formula" dangerouslySetInnerHTML={{ __html: html }} />;
+        };
+
+        const Card = ({ children, className = "" }) => (
+            <div className={`bg-white rounded-xl shadow-md p-6 ${className}`}>{children}</div>
+        );
+
+        const Button = ({ onClick, children, variant = "primary", className = "", disabled=false }) => {
+            const base = "px-4 py-2 rounded-lg font-bold transition duration-200 transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed";
+            const styles = {
+                primary: "bg-blue-600 text-white hover:bg-blue-700",
+                secondary: "bg-gray-200 text-gray-800 hover:bg-gray-300",
+                danger: "bg-red-500 text-white hover:bg-red-600",
+                success: "bg-green-500 text-white hover:bg-green-600",
+                outline: "border-2 border-blue-600 text-blue-600 hover:bg-blue-50"
+            };
+            return (
+                <button onClick={onClick} className={`${base} ${styles[variant]} ${className}`} disabled={disabled}>
+                    {children}
+                </button>
+            );
+        };
+
+        // ==========================================
+        // MAIN APP LOGIC
+        // ==========================================
+        
+        // 初回管理者設定用（必要に応じてメールアドレスを追加）
+        const ADMIN_EMAILS = []; 
+
+        function App() {
+            const [user, setUser] = useState(null);
+            const [userData, setUserData] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [view, setView] = useState("login"); // login, dashboard, quiz1, quiz2, admin
+            const [errorMsg, setErrorMsg] = useState("");
+
+            useEffect(() => {
+                const unsubscribe = window.onAuthStateChanged(window.auth, async (currentUser) => {
+                    setUser(currentUser);
+                    if (currentUser) {
+                        await checkUserRegistration(currentUser);
+                    } else {
+                        setUserData(null);
+                        setLoading(false);
+                    }
+                });
+                return () => unsubscribe();
+            }, []);
+
+            const checkUserRegistration = async (authUser) => {
+                setLoading(true);
+                setErrorMsg("");
+                try {
+                    const email = authUser.email;
+                    // メールアドレスをIDとしてドキュメントを取得
+                    const docRef = window.doc(window.db, "users", email);
+                    const docSnap = await window.getDoc(docRef);
+
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        // 初回ログイン時にUIDなどのメタデータを更新
+                        if (!data.uid) {
+                            await window.updateDoc(docRef, {
+                                uid: authUser.uid,
+                                lastLogin: window.serverTimestamp(),
+                                photoURL: authUser.photoURL
+                            });
+                        }
+                        setUserData(data);
+                        setView(data.role === 'admin' ? 'admin' : 'dashboard');
+                    } else {
+                        // 管理者メールリストに含まれている場合は自動登録（初回セットアップ用）
+                        if (ADMIN_EMAILS.includes(email)) {
+                             const newAdmin = {
+                                email: email,
+                                name: authUser.displayName,
+                                role: 'admin',
+                                registeredAt: window.serverTimestamp()
+                            };
+                            await window.setDoc(docRef, newAdmin);
+                            setUserData(newAdmin);
+                            setView('admin');
+                        } else {
+                            // 未登録ユーザー
+                            setErrorMsg("あなたのメールアドレスは登録されていません。担当教員に連絡してください。");
+                            await window.signOut(window.auth);
+                        }
+                    }
+                } catch (err) {
+                    console.error("Auth Error:", err);
+                    setErrorMsg("ログイン処理中にエラーが発生しました。");
+                }
+                setLoading(false);
+            };
+
+            const handleLogin = async () => {
+                try {
+                    await window.signInWithPopup(window.auth, window.provider);
+                } catch (err) {
+                    console.error("Login Failed:", err);
+                    setErrorMsg("ログインに失敗しました。");
+                }
+            };
+
+            const handleLogout = async () => {
+                await window.signOut(window.auth);
+                setView("login");
+            };
+
+            if (loading) return <div className="min-h-screen flex items-center justify-center"><div className="loader"></div></div>;
+
+            return (
+                <div className="min-h-screen pb-10">
+                    {/* Header */}
+                    <header className="bg-gradient-to-r from-blue-700 to-indigo-800 text-white p-4 shadow-lg">
+                        <div className="max-w-4xl mx-auto flex justify-between items-center">
+                            <h1 className="text-xl font-bold flex items-center gap-2">
+                                <span className="text-2xl">⚗️</span> 酸化還元マスター
+                            </h1>
+                            {userData && (
+                                <div className="flex items-center gap-4">
+                                    <div className="text-sm text-right hidden sm:block">
+                                        <p className="font-bold">{userData.name}</p>
+                                        <p className="opacity-80 text-xs">{userData.grade}年{userData.class}組 {userData.role === 'admin' ? '★管理者' : ''}</p>
+                                    </div>
+                                    <button onClick={handleLogout} className="text-xs bg-white/20 hover:bg-white/30 px-3 py-1 rounded">ログアウト</button>
+                                </div>
+                            )}
+                        </div>
+                    </header>
+
+                    <main className="max-w-4xl mx-auto mt-6 px-4">
+                        {errorMsg && (
+                            <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6" role="alert">
+                                <p>{errorMsg}</p>
+                            </div>
+                        )}
+
+                        {!userData ? (
+                            <div className="flex flex-col items-center justify-center py-20">
+                                <Card className="text-center max-w-md w-full">
+                                    <h2 className="text-2xl font-bold mb-4 text-gray-800">学習を始める</h2>
+                                    <p className="text-gray-600 mb-8">学校のGoogleアカウントでログインしてください。</p>
+                                    <Button onClick={handleLogin} className="w-full py-3 flex justify-center items-center gap-2">
+                                        <svg className="w-5 h-5" viewBox="0 0 24 24"><path fill="currentColor" d="M12.545,10.239v3.821h5.445c-0.712,2.315-2.647,3.972-5.445,3.972c-3.332,0-6.033-2.536-6.033-5.667s2.7-5.667,6.033-5.667c1.398,0,2.684,0.491,3.673,1.303l2.966-2.966C17.37,3.468,15.113,2.441,12.545,2.441C7.156,2.441,2.787,6.81,2.787,12.2s4.369,9.759,9.759,9.759c5.631,0,9.363-3.956,9.363-9.524c0-0.654-0.061-1.298-0.166-1.921L12.545,10.239z"/></svg>
+                                        Googleでログイン
+                                    </Button>
+                                </Card>
+                            </div>
+                        ) : (
+                            <>
+                                {view === 'dashboard' && <Dashboard user={userData} setView={setView} />}
+                                {view === 'quiz1' && <QuizGame questions={oxNumQuestions} type="part1" user={userData} onBack={() => setView('dashboard')} />}
+                                {view === 'quiz2' && <QuizGame questions={redoxQuestions} type="part2" user={userData} onBack={() => setView('dashboard')} />}
+                                {view === 'admin' && <AdminPanel user={userData} setView={setView} />}
+                            </>
+                        )}
+                    </main>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // DASHBOARD (STUDENT)
+        // ==========================================
+        function Dashboard({ user, setView }) {
+            // スタンプ帳コンポーネント
+            const StampCardArea = ({ plays = 0, colorClass = "text-red-500" }) => {
+                const maxStamps = 10; // 画面に表示する最大スタンプ数
+                const displayCount = Math.min(plays, maxStamps);
+                
+                return (
+                    <div className="mt-4 bg-orange-50/50 border border-orange-100 rounded-lg p-3">
+                        <div className="flex justify-between items-center mb-2">
+                            <span className="text-xs font-bold text-gray-500">スタンプ帳</span>
+                            <span className="text-xs font-bold bg-orange-100 text-orange-800 px-2 py-0.5 rounded-full">
+                                クリア回数: {plays}回
+                            </span>
+                        </div>
+                        <div className="flex flex-wrap gap-1 min-h-[40px] items-center">
+                            {plays === 0 && (
+                                <span className="text-xs text-gray-400 w-full text-center py-1">
+                                    クリアしてスタンプを集めよう！
+                                </span>
+                            )}
+                            
+                            {[...Array(displayCount)].map((_, i) => (
+                                <div key={i} 
+                                     className="stamp-appear text-2xl select-none filter drop-shadow-sm transform hover:scale-125 transition-transform cursor-default"
+                                     style={{ animationDelay: `${i * 0.05}s` }}
+                                     title={`${i + 1}回目のクリア！`}>
+                                    💮
+                                </div>
+                            ))}
+                            
+                            {plays > maxStamps && (
+                                <div className="ml-1 flex items-center justify-center w-8 h-8 bg-orange-200 text-orange-800 rounded-full text-xs font-bold shadow-sm stamp-appear" style={{ animationDelay: '0.5s' }}>
+                                    +{plays - maxStamps}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                );
+            };
+
+            return (
+                <div className="space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {/* Part 1 Card */}
+                        <Card className="hover:shadow-xl transition-shadow border-t-4 border-blue-500 cursor-pointer flex flex-col justify-between" >
+                            <div>
+                                <div className="flex justify-between items-start mb-4">
+                                    <h3 className="text-xl font-bold text-gray-800">Part 1: 酸化数決定</h3>
+                                    <span className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full">全50問</span>
+                                </div>
+                                <p className="text-gray-600 text-sm mb-4">単体、化合物、イオン、そして例外的な物質の酸化数を素早く見抜こう！</p>
+                                
+                                {/* スタンプエリア Part 1 */}
+                                <StampCardArea plays={user.progress?.part1?.plays || 0} />
+                            </div>
+
+                            <div className="flex justify-between items-center mt-6 pt-4 border-t border-gray-100">
+                                <div className="text-sm text-gray-500">
+                                    最高スコア: <span className="font-bold text-blue-600">{user.progress?.part1?.highScore || 0}</span>
+                                </div>
+                                <Button onClick={() => setView('quiz1')}>スタート</Button>
+                            </div>
+                        </Card>
+
+                        {/* Part 2 Card */}
+                        <Card className="hover:shadow-xl transition-shadow border-t-4 border-green-500 cursor-pointer flex flex-col justify-between">
+                            <div>
+                                <div className="flex justify-between items-start mb-4">
+                                    <h3 className="text-xl font-bold text-gray-800">Part 2: 酸化還元反応</h3>
+                                    <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full">全30問</span>
+                                </div>
+                                <p className="text-gray-600 text-sm mb-4">酸化剤・還元剤を見極めろ。「酸化された物質」との違いに注意！</p>
+                                
+                                {/* スタンプエリア Part 2 */}
+                                <StampCardArea plays={user.progress?.part2?.plays || 0} />
+                            </div>
+
+                            <div className="flex justify-between items-center mt-6 pt-4 border-t border-gray-100">
+                                <div className="text-sm text-gray-500">
+                                    最高スコア: <span className="font-bold text-green-600">{user.progress?.part2?.highScore || 0}</span>
+                                </div>
+                                <Button onClick={() => setView('quiz2')} variant="success">スタート</Button>
+                            </div>
+                        </Card>
+                    </div>
+
+                    {user.role === 'admin' && (
+                        <div className="text-center mt-8">
+                            <Button onClick={() => setView('admin')} variant="secondary">管理者パネルへ移動</Button>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // ==========================================
+        // QUIZ GAME ENGINE
+        // ==========================================
+        function QuizGame({ questions, type, user, onBack }) {
+            // Game State
+            const [currentQIndex, setCurrentQIndex] = useState(0);
+            const [shuffledQuestions, setShuffledQuestions] = useState([]);
+            const [score, setScore] = useState(0);
+            const [streak, setStreak] = useState(0);
+            const [gameState, setGameState] = useState('ready'); // ready, playing, feedback, result
+            const [userAnswer, setUserAnswer] = useState("");
+            const [feedback, setFeedback] = useState(null); // { correct: bool, msg: string }
+            const [inputVal, setInputVal] = useState("");
+
+            // Setup Game
+            useEffect(() => {
+                // Shuffle questions
+                const shuffled = [...questions].sort(() => 0.5 - Math.random());
+                setShuffledQuestions(shuffled);
+                setGameState('playing');
+            }, [questions]);
+
+            const currentQ = shuffledQuestions[currentQIndex];
+
+            // Handle Answer Submission
+            const submitAnswer = (ans) => {
+                if (gameState === 'feedback') return;
+                
+                const isCorrect = normalize(ans) === normalize(currentQ.answer || currentQ.a);
+                const explanation = type === 'part1' ? 
+                    `${currentQ.target}の酸化数は ${currentQ.answer} (${currentQ.note})` : 
+                    `${currentQ.a}。解説: ${currentQ.exp}`;
+
+                setFeedback({
+                    correct: isCorrect,
+                    msg: explanation,
+                    correctAnswer: type === 'part1' ? currentQ.answer : currentQ.a
+                });
+                
+                if (isCorrect) {
+                    setScore(s => s + 10 + (streak * 2)); // Bonus for streak
+                    setStreak(s => s + 1);
+                    // Play sound effect logic here if needed
+                } else {
+                    setStreak(0);
+                }
+
+                setGameState('feedback');
+            };
+
+            const nextQuestion = () => {
+                setFeedback(null);
+                setInputVal("");
+                if (currentQIndex + 1 >= shuffledQuestions.length) {
+                    finishGame();
+                } else {
+                    setCurrentQIndex(prev => prev + 1);
+                    setGameState('playing');
+                }
+            };
+
+            const finishGame = async () => {
+                setGameState('result');
+                // Save Score to Firestore
+                try {
+                    const docRef = window.doc(window.db, "users", user.email);
+                    const currentHighScore = user.progress?.[type]?.highScore || 0;
+                    const plays = user.progress?.[type]?.plays || 0;
+                    
+                    const updateData = {
+                        [`progress.${type}.lastScore`]: score,
+                        [`progress.${type}.plays`]: plays + 1,
+                        [`progress.${type}.lastPlayedAt`]: window.serverTimestamp()
+                    };
+
+                    if (score > currentHighScore) {
+                        updateData[`progress.${type}.highScore`] = score;
+                    }
+
+                    await window.updateDoc(docRef, updateData);
+                } catch (err) {
+                    console.error("Save score failed", err);
+                }
+            };
+
+            const normalize = (str) => String(str).replace(/\s/g, '').replace(/＋/g, '+').replace(/−/g, '-');
+
+            // Render Input (Part 1 vs Part 2)
+            const renderInput = () => {
+                if (type === 'part1') {
+                    // Number pad logic for Part 1
+                    const buttons = ["+1", "+2", "+3", "+4", "+5", "+6", "+7", "0", "-1", "-2", "-3", "-4"];
+                    return (
+                        <div className="grid grid-cols-4 gap-2 mt-4">
+                            {buttons.map(b => (
+                                <button key={b} onClick={() => submitAnswer(b)} 
+                                    className="bg-blue-50 hover:bg-blue-100 text-blue-800 font-bold py-3 rounded border border-blue-200 shadow-sm">
+                                    {b}
+                                </button>
+                            ))}
+                        </div>
+                    );
+                } else {
+                    // Multiple Choice or Input for Part 2? 
+                    // To keep it simple and robust on mobile, let's use generated options + correct answer
+                    // Generate distractors
+                    const options = useMemo(() => {
+                        if (!currentQ) return [];
+                        // Extract chemicals from equation
+                        const parts = currentQ.eq.split(/\\to|\+|\s+/).filter(p => p.includes('\\text') && p.length > 5).map(p => p.replace(/^[0-9]+/, ''));
+                        // Clean parts
+                        const cleanParts = [...new Set(parts.map(p => p.replace(/\\text\{([^}]+)\}.*/, '$1').replace(/_/g, '').replace(/[^a-zA-Z0-9]/g, '')))];
+                        // Ensure correct answer is in options even if parsing failed
+                        const correct = currentQ.a;
+                        let pool = [...cleanParts];
+                        if (!pool.includes(correct)) pool.push(correct);
+                        // Add common distractors if few options
+                        if (pool.length < 3) pool.push("H2O", "e-", "H+");
+                        
+                        return pool.slice(0, 4).sort();
+                    }, [currentQ]);
+
+                    return (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
+                            {options.map((opt, i) => (
+                                <button key={i} onClick={() => submitAnswer(opt)}
+                                    className="bg-indigo-50 hover:bg-indigo-100 text-indigo-900 font-bold py-3 rounded border border-indigo-200">
+                                    <Formula text={`\\text{${opt}}`} />
+                                </button>
+                            ))}
+                        </div>
+                    );
+                }
+            };
+
+            if (gameState === 'result') {
+                return (
+                    <Card className="text-center py-10">
+                        <h2 className="text-3xl font-bold mb-4">結果発表</h2>
+                        <div className="text-5xl font-black text-blue-600 mb-2">{score} <span className="text-xl text-gray-500">点</span></div>
+                        <p className="text-gray-500 mb-8">お疲れ様でした！</p>
+                        <Button onClick={onBack}>メニューに戻る</Button>
+                    </Card>
+                );
+            }
+
+            if (!currentQ) return <div className="loader mx-auto"></div>;
+
+            return (
+                <div className="max-w-2xl mx-auto">
+                    {/* Header Info */}
+                    <div className="flex justify-between items-center mb-4 text-sm font-bold text-gray-600">
+                        <div>Q. {currentQIndex + 1} / {shuffledQuestions.length}</div>
+                        <div>Score: {score}</div>
+                    </div>
+
+                    {/* Progress Bar */}
+                    <div className="w-full bg-gray-200 rounded-full h-2 mb-6">
+                        <div className="bg-blue-600 h-2 rounded-full transition-all duration-300" style={{ width: `${((currentQIndex) / shuffledQuestions.length) * 100}%` }}></div>
+                    </div>
+
+                    {/* Question Card */}
+                    <Card className="mb-6 min-h-[200px] flex flex-col justify-center items-center text-center">
+                        <div className="text-lg text-gray-500 mb-2">
+                            {type === 'part1' ? `対象元素: ${currentQ.target}` : currentQ.q}
+                        </div>
+                        <div className="text-3xl mb-6">
+                            <Formula text={type === 'part1' ? currentQ.formula : currentQ.eq} />
+                        </div>
+                        {type === 'part1' && <div className="text-sm text-gray-400">この原子の酸化数は？</div>}
+                    </Card>
+
+                    {/* Input Area */}
+                    {!feedback ? renderInput() : (
+                        <div className={`p-4 rounded-lg border-2 text-center ${feedback.correct ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
+                            <div className="text-xl font-bold mb-2">
+                                {feedback.correct ? "⭕ 正解！" : "❌ 残念..."}
+                            </div>
+                            <div className="mb-4">
+                                {!feedback.correct && <div className="mb-1">正解: <b>{feedback.correctAnswer}</b></div>}
+                                <div className="text-sm opacity-90">{feedback.msg}</div>
+                            </div>
+                            <Button onClick={nextQuestion} className="w-full" variant={feedback.correct ? 'success' : 'danger'}>次へ</Button>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // ==========================================
+        // ADMIN PANEL
+        // ==========================================
+        function AdminPanel({ user, setView }) {
+            const [csvText, setCsvText] = useState("");
+            const [students, setStudents] = useState([]);
+            const [status, setStatus] = useState("");
+
+            useEffect(() => {
+                fetchStudents();
+            }, []);
+
+            const fetchStudents = async () => {
+                const q = window.query(window.collection(window.db, "users"), window.where("role", "==", "student"));
+                const snapshot = await window.getDocs(q);
+                const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                setStudents(list);
+            };
+
+            const handleCsvUpload = async () => {
+                setStatus("アップロード中...");
+                const lines = csvText.trim().split("\n");
+                let count = 0;
+                
+                // Expected format: email,name,grade,class,number
+                for (let line of lines) {
+                    const [email, name, grade, cls, num] = line.split(",").map(s => s.trim());
+                    if (!email || !email.includes("@")) continue;
+
+                    try {
+                        const docRef = window.doc(window.db, "users", email);
+                        // Check if exists to preserve progress
+                        const snap = await window.getDoc(docRef);
+                        if (!snap.exists()) {
+                            await window.setDoc(docRef, {
+                                email, name, grade, class: cls, number: num, role: 'student', createdAt: window.serverTimestamp()
+                            });
+                        } else {
+                            // Update info but keep progress
+                            await window.updateDoc(docRef, { name, grade, class: cls, number: num });
+                        }
+                        count++;
+                    } catch (e) {
+                        console.error("Error adding " + email, e);
+                    }
+                }
+                setStatus(`${count}件の生徒データを更新しました。`);
+                fetchStudents();
+                setCsvText("");
+            };
+
+            const exportCsv = () => {
+                let csv = "\uFEFFEmail,氏名,学年,組,番号,Part1最高点,Part1回数,Part2最高点,Part2回数\n";
+                students.forEach(s => {
+                    const p1 = s.progress?.part1 || {};
+                    const p2 = s.progress?.part2 || {};
+                    csv += `"${s.id}","${s.name}","${s.grade}","${s.class}","${s.number}",${p1.highScore||0},${p1.plays||0},${p2.highScore||0},${p2.plays||0}\n`;
+                });
+                
+                const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(blob);
+                link.download = "student_progress.csv";
+                link.click();
+            };
+
+            return (
+                <div className="space-y-8">
+                    <div className="flex justify-between items-center">
+                        <h2 className="text-2xl font-bold text-gray-800">管理者ダッシュボード</h2>
+                        <Button onClick={() => setView('dashboard')} variant="outline">学生画面へ</Button>
+                    </div>
+
+                    {/* CSV Upload Section */}
+                    <Card>
+                        <h3 className="font-bold mb-4 text-lg">📁 生徒一括登録 (CSV)</h3>
+                        <p className="text-sm text-gray-500 mb-2">
+                            ヘッダーなし、以下の順序でカンマ区切り:<br/>
+                            <code>メールアドレス,氏名,学年,組,番号</code>
+                        </p>
+                        <textarea 
+                            className="w-full border p-2 rounded mb-4 text-sm font-mono h-32"
+                            placeholder={`student1@school.ed.jp,山田太郎,1,A,1\nstudent2@school.ed.jp,鈴木花子,1,A,2`}
+                            value={csvText}
+                            onChange={(e) => setCsvText(e.target.value)}
+                        />
+                        <div className="flex items-center gap-4">
+                            <Button onClick={handleCsvUpload} disabled={!csvText}>アップロード・更新</Button>
+                            {status && <span className="text-green-600 font-bold text-sm">{status}</span>}
+                        </div>
+                    </Card>
+
+                    {/* Student List & Export */}
+                    <Card>
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="font-bold text-lg">📊 学習状況一覧 ({students.length}名)</h3>
+                            <Button onClick={exportCsv} variant="success">CSVエクスポート</Button>
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full text-sm text-left text-gray-500">
+                                <thead className="text-xs text-gray-700 uppercase bg-gray-50">
+                                    <tr>
+                                        <th className="px-4 py-3">氏名</th>
+                                        <th className="px-4 py-3">クラス</th>
+                                        <th className="px-4 py-3">Part 1 (点/回)</th>
+                                        <th className="px-4 py-3">Part 2 (点/回)</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {students.map(s => (
+                                        <tr key={s.id} className="bg-white border-b hover:bg-gray-50">
+                                            <td className="px-4 py-3 font-medium text-gray-900">{s.name}</td>
+                                            <td className="px-4 py-3">{s.grade}-{s.class}-{s.number}</td>
+                                            <td className="px-4 py-3">
+                                                <span className="font-bold text-blue-600">{s.progress?.part1?.highScore || 0}</span>
+                                                <span className="text-xs ml-1 text-gray-400">({s.progress?.part1?.plays || 0}回)</span>
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                <span className="font-bold text-green-600">{s.progress?.part2?.highScore || 0}</span>
+                                                <span className="text-xs ml-1 text-gray-400">({s.progress?.part2?.plays || 0}回)</span>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </Card>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
