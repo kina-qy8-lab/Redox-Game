@@ -47,7 +47,7 @@
         window.provider = provider;
         window.signInWithPopup = signInWithPopup;
         window.signOut = signOut;
-        window.onAuthStateChanged = onAuthStateChanged; // Assign to window explicitly
+        window.onAuthStateChanged = onAuthStateChanged; 
         window.doc = doc;
         window.setDoc = setDoc;
         window.getDoc = getDoc;
@@ -84,9 +84,8 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useMemo } = React;
+        const { useState, useEffect, useMemo, useRef } = React;
 
-        // ... DATA arrays (oxNumQuestions, redoxQuestions) ... (Keep these as they are)
         // Part 1: 酸化数決定
         const oxNumQuestions = [
             { id: "1-01", formula: "\\text{H}_2", target: "H", answer: "0", note: "単体" },
@@ -179,7 +178,7 @@
         // COMPONENTS
         // ==========================================
 
-        const Formula = ({ text }) => {
+        const Formula = ({ text, highlight }) => {
             if (!text) return null;
             let html = text.replace(/\\text\{([^}]+)\}/g, '$1');
             html = html.replace(/_(\{[^}]+\}|\d+)/g, (match, p1) => {
@@ -191,6 +190,18 @@
                 return `<sup>${content}</sup>`;
             });
             html = html.replace(/\\to/g, '→').replace(/\\rightleftharpoons/g, '⇄').replace(/\\dots/g, '…');
+
+            // ハイライト処理: 対象原子（例：H, Cu）を赤色太字＋下線で強調
+            // 注意: 単純な置換だと一部の文字列に含まれる文字も置換するリスクがあるが、
+            // 今回のデータセット（元素記号）であれば概ね安全。
+            if (highlight) {
+                // タグ（<sub>等）を壊さないように、HTMLタグ以外の部分でマッチさせる簡易的な手法
+                // ここでは単純化のため、生成後のHTML文字列に対して置換を行う。
+                const regex = new RegExp(`(${highlight})`, 'g');
+                // <sub>や<sup>の中身も元素記号ならハイライトされてもOK
+                html = html.replace(regex, `<span class="text-red-600 font-bold border-b-2 border-red-600">$1</span>`);
+            }
+
             return <span className="chemical-formula" dangerouslySetInnerHTML={{ __html: html }} />;
         };
 
@@ -228,7 +239,6 @@
             const [errorMsg, setErrorMsg] = useState("");
 
             useEffect(() => {
-                // Ensure auth is available before using it
                 if (!window.auth || !window.onAuthStateChanged) {
                     setErrorMsg("Firebase Initialization Error");
                     setLoading(false);
@@ -294,7 +304,13 @@
                     await window.signInWithPopup(window.auth, window.provider);
                 } catch (err) {
                     console.error("Login Failed:", err);
-                    setErrorMsg("ログインに失敗しました。");
+                    if (err.code === 'auth/unauthorized-domain') {
+                        setErrorMsg(`ドメイン許可エラー: Firebase ConsoleのAuthentication設定で、このドメイン (${window.location.hostname}) を「承認済みドメイン」に追加してください。`);
+                    } else if (err.code === 'auth/popup-closed-by-user') {
+                        setErrorMsg("ログインがキャンセルされました。");
+                    } else {
+                        setErrorMsg("ログインに失敗しました: " + err.message);
+                    }
                 }
             };
 
@@ -399,9 +415,9 @@
                             <div>
                                 <div className="flex justify-between items-start mb-4">
                                     <h3 className="text-xl font-bold text-gray-800">Part 1: 酸化数決定</h3>
-                                    <span className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full">全50問</span>
+                                    <span className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full">全10問 (90秒)</span>
                                 </div>
-                                <p className="text-gray-600 text-sm mb-4">単体、化合物、イオン、そして例外的な物質の酸化数を素早く見抜こう！</p>
+                                <p className="text-gray-600 text-sm mb-4">単体、化合物、イオン、そして例外的な物質の酸化数を素早く見抜こう！<br/><span className="text-red-500 font-bold">8問以上正解でクリア！</span></p>
                                 <StampCardArea plays={user.progress?.part1?.plays || 0} />
                             </div>
                             <div className="flex justify-between items-center mt-6 pt-4 border-t border-gray-100">
@@ -416,9 +432,9 @@
                             <div>
                                 <div className="flex justify-between items-start mb-4">
                                     <h3 className="text-xl font-bold text-gray-800">Part 2: 酸化還元反応</h3>
-                                    <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full">全30問</span>
+                                    <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full">全10問 (90秒)</span>
                                 </div>
-                                <p className="text-gray-600 text-sm mb-4">酸化剤・還元剤を見極めろ。「酸化された物質」との違いに注意！</p>
+                                <p className="text-gray-600 text-sm mb-4">酸化剤・還元剤を見極めろ。「酸化された物質」との違いに注意！<br/><span className="text-green-600 font-bold">8問以上正解でクリア！</span></p>
                                 <StampCardArea plays={user.progress?.part2?.plays || 0} />
                             </div>
                             <div className="flex justify-between items-center mt-6 pt-4 border-t border-gray-100">
@@ -439,19 +455,94 @@
             );
         }
 
+        // ==========================================
+        // QUIZ INPUT COMPONENT (Fixes Minified Error #310)
+        // ==========================================
+        const QuizInput = ({ type, currentQ, submitAnswer }) => {
+            const options = useMemo(() => {
+                if (type === 'part1') return [];
+                if (!currentQ) return [];
+                
+                // Extract chemicals from equation
+                const parts = currentQ.eq.split(/\\to|\+|\s+/).filter(p => p.includes('\\text') && p.length > 5).map(p => p.replace(/^[0-9]+/, ''));
+                // Clean parts
+                const cleanParts = [...new Set(parts.map(p => p.replace(/\\text\{([^}]+)\}.*/, '$1').replace(/_/g, '').replace(/[^a-zA-Z0-9]/g, '')))];
+                const correct = currentQ.a;
+                let pool = [...cleanParts];
+                if (!pool.includes(correct)) pool.push(correct);
+                if (pool.length < 3) pool.push("H2O", "e-", "H+");
+                
+                return pool.slice(0, 4).sort();
+            }, [currentQ, type]);
+
+            if (type === 'part1') {
+                const buttons = ["+1", "+2", "+3", "+4", "+5", "+6", "+7", "0", "-1", "-2", "-3", "-4"];
+                return (
+                    <div className="grid grid-cols-4 gap-2 mt-4">
+                        {buttons.map(b => (
+                            <button key={b} onClick={() => submitAnswer(b)} 
+                                className="bg-blue-50 hover:bg-blue-100 text-blue-800 font-bold py-3 rounded border border-blue-200 shadow-sm">
+                                {b}
+                            </button>
+                        ))}
+                    </div>
+                );
+            } else {
+                return (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
+                        {options.map((opt, i) => (
+                            <button key={i} onClick={() => submitAnswer(opt)}
+                                className="bg-indigo-50 hover:bg-indigo-100 text-indigo-900 font-bold py-3 rounded border border-indigo-200">
+                                <Formula text={`\\text{${opt}}`} />
+                            </button>
+                        ))}
+                    </div>
+                );
+            }
+        };
+
         function QuizGame({ questions, type, user, onBack }) {
             const [currentQIndex, setCurrentQIndex] = useState(0);
             const [shuffledQuestions, setShuffledQuestions] = useState([]);
             const [score, setScore] = useState(0);
-            const [streak, setStreak] = useState(0);
+            const [correctCount, setCorrectCount] = useState(0); // 正解数をカウント
             const [gameState, setGameState] = useState('ready');
             const [feedback, setFeedback] = useState(null);
+            const [timeLeft, setTimeLeft] = useState(90); // 90秒タイマー
 
             useEffect(() => {
-                const shuffled = [...questions].sort(() => 0.5 - Math.random());
+                // シャッフルして10問だけ選ぶ
+                const shuffled = [...questions].sort(() => 0.5 - Math.random()).slice(0, 10);
                 setShuffledQuestions(shuffled);
                 setGameState('playing');
+                setTimeLeft(90);
             }, [questions]);
+
+            // タイマー処理
+            useEffect(() => {
+                if (gameState !== 'playing') return;
+                
+                const timer = setInterval(() => {
+                    setTimeLeft(prev => {
+                        if (prev <= 1) {
+                            clearInterval(timer);
+                            // タイムアウト時の処理（ゲーム終了へ）
+                            setGameState('timeout');
+                            return 0;
+                        }
+                        return prev - 1;
+                    });
+                }, 1000);
+
+                return () => clearInterval(timer);
+            }, [gameState]);
+
+            // タイムアウト監視
+            useEffect(() => {
+                if (gameState === 'timeout') {
+                    finishGame();
+                }
+            }, [gameState]);
 
             const currentQ = shuffledQuestions[currentQIndex];
 
@@ -470,10 +561,8 @@
                 });
                 
                 if (isCorrect) {
-                    setScore(s => s + 10 + (streak * 2));
-                    setStreak(s => s + 1);
-                } else {
-                    setStreak(0);
+                    setScore(s => s + 10); // 得点計算（シンプルに1問10点）
+                    setCorrectCount(c => c + 1);
                 }
 
                 setGameState('feedback');
@@ -491,6 +580,8 @@
 
             const finishGame = async () => {
                 setGameState('result');
+                const isPassed = correctCount >= 8; // 8問以上で合格
+
                 try {
                     const docRef = window.doc(window.db, "users", user.email);
                     const currentHighScore = user.progress?.[type]?.highScore || 0;
@@ -498,9 +589,13 @@
                     
                     const updateData = {
                         [`progress.${type}.lastScore`]: score,
-                        [`progress.${type}.plays`]: plays + 1,
                         [`progress.${type}.lastPlayedAt`]: window.serverTimestamp()
                     };
+
+                    // 合格（8問以上正解）の場合のみ、クリア回数（スタンプ）を増やす
+                    if (isPassed) {
+                         updateData[`progress.${type}.plays`] = plays + 1;
+                    }
 
                     if (score > currentHighScore) {
                         updateData[`progress.${type}.highScore`] = score;
@@ -514,50 +609,19 @@
 
             const normalize = (str) => String(str).replace(/\s/g, '').replace(/＋/g, '+').replace(/−/g, '-');
 
-            const renderInput = () => {
-                if (type === 'part1') {
-                    const buttons = ["+1", "+2", "+3", "+4", "+5", "+6", "+7", "0", "-1", "-2", "-3", "-4"];
-                    return (
-                        <div className="grid grid-cols-4 gap-2 mt-4">
-                            {buttons.map(b => (
-                                <button key={b} onClick={() => submitAnswer(b)} 
-                                    className="bg-blue-50 hover:bg-blue-100 text-blue-800 font-bold py-3 rounded border border-blue-200 shadow-sm">
-                                    {b}
-                                </button>
-                            ))}
-                        </div>
-                    );
-                } else {
-                    const options = useMemo(() => {
-                        if (!currentQ) return [];
-                        const parts = currentQ.eq.split(/\\to|\+|\s+/).filter(p => p.includes('\\text') && p.length > 5).map(p => p.replace(/^[0-9]+/, ''));
-                        const cleanParts = [...new Set(parts.map(p => p.replace(/\\text\{([^}]+)\}.*/, '$1').replace(/_/g, '').replace(/[^a-zA-Z0-9]/g, '')))];
-                        const correct = currentQ.a;
-                        let pool = [...cleanParts];
-                        if (!pool.includes(correct)) pool.push(correct);
-                        if (pool.length < 3) pool.push("H2O", "e-", "H+");
-                        return pool.slice(0, 4).sort();
-                    }, [currentQ]);
-
-                    return (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
-                            {options.map((opt, i) => (
-                                <button key={i} onClick={() => submitAnswer(opt)}
-                                    className="bg-indigo-50 hover:bg-indigo-100 text-indigo-900 font-bold py-3 rounded border border-indigo-200">
-                                    <Formula text={`\\text{${opt}}`} />
-                                </button>
-                            ))}
-                        </div>
-                    );
-                }
-            };
-
-            if (gameState === 'result') {
+            if (gameState === 'result' || gameState === 'timeout') {
+                const isPassed = correctCount >= 8;
                 return (
                     <Card className="text-center py-10">
                         <h2 className="text-3xl font-bold mb-4">結果発表</h2>
+                        {gameState === 'timeout' && <div className="text-red-500 font-bold mb-4">時間切れ！</div>}
                         <div className="text-5xl font-black text-blue-600 mb-2">{score} <span className="text-xl text-gray-500">点</span></div>
-                        <p className="text-gray-500 mb-8">お疲れ様でした！</p>
+                        <p className="text-lg mb-2">{correctCount}問 正解 / 10問中</p>
+                        
+                        <div className={`text-2xl font-bold mb-8 py-2 px-6 rounded-full inline-block ${isPassed ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                            {isPassed ? "💮 合格！" : "💪 あと一歩..."}
+                        </div>
+                        <br/>
                         <Button onClick={onBack}>メニューに戻る</Button>
                     </Card>
                 );
@@ -567,23 +631,35 @@
 
             return (
                 <div className="max-w-2xl mx-auto">
-                    <div className="flex justify-between items-center mb-4 text-sm font-bold text-gray-600">
-                        <div>Q. {currentQIndex + 1} / {shuffledQuestions.length}</div>
+                    <div className="flex justify-between items-center mb-2 text-sm font-bold text-gray-600">
+                        <div>Q. {currentQIndex + 1} / 10</div>
+                        <div className={`text-lg ${timeLeft < 10 ? 'text-red-600 animate-pulse' : 'text-blue-600'}`}>
+                            ⏱️ {timeLeft}秒
+                        </div>
                         <div>Score: {score}</div>
                     </div>
+                    
                     <div className="w-full bg-gray-200 rounded-full h-2 mb-6">
-                        <div className="bg-blue-600 h-2 rounded-full transition-all duration-300" style={{ width: `${((currentQIndex) / shuffledQuestions.length) * 100}%` }}></div>
+                        <div className="bg-blue-600 h-2 rounded-full transition-all duration-300" style={{ width: `${((currentQIndex) / 10) * 100}%` }}></div>
                     </div>
+
                     <Card className="mb-6 min-h-[200px] flex flex-col justify-center items-center text-center">
                         <div className="text-lg text-gray-500 mb-2">
                             {type === 'part1' ? `対象元素: ${currentQ.target}` : currentQ.q}
                         </div>
                         <div className="text-3xl mb-6">
-                            <Formula text={type === 'part1' ? currentQ.formula : currentQ.eq} />
+                            {/* Part1の場合、対象元素をハイライト */}
+                            <Formula 
+                                text={type === 'part1' ? currentQ.formula : currentQ.eq} 
+                                highlight={type === 'part1' ? currentQ.target : null} 
+                            />
                         </div>
                         {type === 'part1' && <div className="text-sm text-gray-400">この原子の酸化数は？</div>}
                     </Card>
-                    {!feedback ? renderInput() : (
+
+                    {!feedback ? (
+                        <QuizInput type={type} currentQ={currentQ} submitAnswer={submitAnswer} />
+                    ) : (
                         <div className={`p-4 rounded-lg border-2 text-center ${feedback.correct ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
                             <div className="text-xl font-bold mb-2">
                                 {feedback.correct ? "⭕ 正解！" : "❌ 残念..."}
@@ -645,7 +721,7 @@
             };
 
             const exportCsv = () => {
-                let csv = "\uFEFFEmail,氏名,学年,組,番号,Part1最高点,Part1回数,Part2最高点,Part2回数\n";
+                let csv = "\uFEFFEmail,氏名,学年,組,番号,Part1最高点,Part1クリア回数,Part2最高点,Part2クリア回数\n";
                 students.forEach(s => {
                     const p1 = s.progress?.part1 || {};
                     const p2 = s.progress?.part2 || {};
