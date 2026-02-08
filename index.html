@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>酸化還元マスター | Oxidation Master</title>
+    <!-- Prevent 404 for favicon -->
+    <link rel="icon" href="data:,">
     
     <!-- React & ReactDOM -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -45,6 +47,7 @@
         window.provider = provider;
         window.signInWithPopup = signInWithPopup;
         window.signOut = signOut;
+        window.onAuthStateChanged = onAuthStateChanged; // Assign to window explicitly
         window.doc = doc;
         window.setDoc = setDoc;
         window.getDoc = getDoc;
@@ -52,6 +55,12 @@
         window.collection = collection;
         window.getDocs = getDocs;
         window.serverTimestamp = serverTimestamp;
+        window.query = query;
+        window.where = where;
+
+        // Signal that Firebase is ready
+        window.firebaseInitialized = true;
+        window.dispatchEvent(new Event('firebase-ready'));
     </script>
 
     <style>
@@ -77,10 +86,7 @@
     <script type="text/babel">
         const { useState, useEffect, useMemo } = React;
 
-        // ==========================================
-        // DATA: 問題データベース
-        // ==========================================
-        
+        // ... DATA arrays (oxNumQuestions, redoxQuestions) ... (Keep these as they are)
         // Part 1: 酸化数決定
         const oxNumQuestions = [
             { id: "1-01", formula: "\\text{H}_2", target: "H", answer: "0", note: "単体" },
@@ -170,25 +176,21 @@
         ];
 
         // ==========================================
-        // COMPONENTS: UIコンポーネント
+        // COMPONENTS
         // ==========================================
 
-        // 化学式レンダラー (簡易版)
         const Formula = ({ text }) => {
             if (!text) return null;
-            // \text{}の除去, _数字 の下付き化, ^数字 の上付き化
-            // 注意: 厳密なLaTeXパーサーではないが、今回のデータセットには十分
             let html = text.replace(/\\text\{([^}]+)\}/g, '$1');
             html = html.replace(/_(\{[^}]+\}|\d+)/g, (match, p1) => {
                 const content = p1.replace(/\{|\}/g, '');
                 return `<sub>${content}</sub>`;
             });
-            html = html.replace(/\^(\{[^}]+\}|\d+|\S)/g, (match, p1) => { // ^- や ^2- などに対応
+            html = html.replace(/\^(\{[^}]+\}|\d+|\S)/g, (match, p1) => { 
                 const content = p1.replace(/\{|\}/g, '');
                 return `<sup>${content}</sup>`;
             });
             html = html.replace(/\\to/g, '→').replace(/\\rightleftharpoons/g, '⇄').replace(/\\dots/g, '…');
-            
             return <span className="chemical-formula" dangerouslySetInnerHTML={{ __html: html }} />;
         };
 
@@ -216,17 +218,23 @@
         // MAIN APP LOGIC
         // ==========================================
         
-        // 初回管理者設定用（必要に応じてメールアドレスを追加）
         const ADMIN_EMAILS = []; 
 
         function App() {
             const [user, setUser] = useState(null);
             const [userData, setUserData] = useState(null);
             const [loading, setLoading] = useState(true);
-            const [view, setView] = useState("login"); // login, dashboard, quiz1, quiz2, admin
+            const [view, setView] = useState("login");
             const [errorMsg, setErrorMsg] = useState("");
 
             useEffect(() => {
+                // Ensure auth is available before using it
+                if (!window.auth || !window.onAuthStateChanged) {
+                    setErrorMsg("Firebase Initialization Error");
+                    setLoading(false);
+                    return;
+                }
+
                 const unsubscribe = window.onAuthStateChanged(window.auth, async (currentUser) => {
                     setUser(currentUser);
                     if (currentUser) {
@@ -244,13 +252,11 @@
                 setErrorMsg("");
                 try {
                     const email = authUser.email;
-                    // メールアドレスをIDとしてドキュメントを取得
                     const docRef = window.doc(window.db, "users", email);
                     const docSnap = await window.getDoc(docRef);
 
                     if (docSnap.exists()) {
                         const data = docSnap.data();
-                        // 初回ログイン時にUIDなどのメタデータを更新
                         if (!data.uid) {
                             await window.updateDoc(docRef, {
                                 uid: authUser.uid,
@@ -261,7 +267,6 @@
                         setUserData(data);
                         setView(data.role === 'admin' ? 'admin' : 'dashboard');
                     } else {
-                        // 管理者メールリストに含まれている場合は自動登録（初回セットアップ用）
                         if (ADMIN_EMAILS.includes(email)) {
                              const newAdmin = {
                                 email: email,
@@ -273,7 +278,6 @@
                             setUserData(newAdmin);
                             setView('admin');
                         } else {
-                            // 未登録ユーザー
                             setErrorMsg("あなたのメールアドレスは登録されていません。担当教員に連絡してください。");
                             await window.signOut(window.auth);
                         }
@@ -303,7 +307,6 @@
 
             return (
                 <div className="min-h-screen pb-10">
-                    {/* Header */}
                     <header className="bg-gradient-to-r from-blue-700 to-indigo-800 text-white p-4 shadow-lg">
                         <div className="max-w-4xl mx-auto flex justify-between items-center">
                             <h1 className="text-xl font-bold flex items-center gap-2">
@@ -352,13 +355,9 @@
             );
         }
 
-        // ==========================================
-        // DASHBOARD (STUDENT)
-        // ==========================================
         function Dashboard({ user, setView }) {
-            // スタンプ帳コンポーネント
             const StampCardArea = ({ plays = 0, colorClass = "text-red-500" }) => {
-                const maxStamps = 10; // 画面に表示する最大スタンプ数
+                const maxStamps = 10;
                 const displayCount = Math.min(plays, maxStamps);
                 
                 return (
@@ -375,7 +374,6 @@
                                     クリアしてスタンプを集めよう！
                                 </span>
                             )}
-                            
                             {[...Array(displayCount)].map((_, i) => (
                                 <div key={i} 
                                      className="stamp-appear text-2xl select-none filter drop-shadow-sm transform hover:scale-125 transition-transform cursor-default"
@@ -384,7 +382,6 @@
                                     💮
                                 </div>
                             ))}
-                            
                             {plays > maxStamps && (
                                 <div className="ml-1 flex items-center justify-center w-8 h-8 bg-orange-200 text-orange-800 rounded-full text-xs font-bold shadow-sm stamp-appear" style={{ animationDelay: '0.5s' }}>
                                     +{plays - maxStamps}
@@ -398,7 +395,6 @@
             return (
                 <div className="space-y-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {/* Part 1 Card */}
                         <Card className="hover:shadow-xl transition-shadow border-t-4 border-blue-500 cursor-pointer flex flex-col justify-between" >
                             <div>
                                 <div className="flex justify-between items-start mb-4">
@@ -406,11 +402,8 @@
                                     <span className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full">全50問</span>
                                 </div>
                                 <p className="text-gray-600 text-sm mb-4">単体、化合物、イオン、そして例外的な物質の酸化数を素早く見抜こう！</p>
-                                
-                                {/* スタンプエリア Part 1 */}
                                 <StampCardArea plays={user.progress?.part1?.plays || 0} />
                             </div>
-
                             <div className="flex justify-between items-center mt-6 pt-4 border-t border-gray-100">
                                 <div className="text-sm text-gray-500">
                                     最高スコア: <span className="font-bold text-blue-600">{user.progress?.part1?.highScore || 0}</span>
@@ -419,7 +412,6 @@
                             </div>
                         </Card>
 
-                        {/* Part 2 Card */}
                         <Card className="hover:shadow-xl transition-shadow border-t-4 border-green-500 cursor-pointer flex flex-col justify-between">
                             <div>
                                 <div className="flex justify-between items-start mb-4">
@@ -427,11 +419,8 @@
                                     <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full">全30問</span>
                                 </div>
                                 <p className="text-gray-600 text-sm mb-4">酸化剤・還元剤を見極めろ。「酸化された物質」との違いに注意！</p>
-                                
-                                {/* スタンプエリア Part 2 */}
                                 <StampCardArea plays={user.progress?.part2?.plays || 0} />
                             </div>
-
                             <div className="flex justify-between items-center mt-6 pt-4 border-t border-gray-100">
                                 <div className="text-sm text-gray-500">
                                     最高スコア: <span className="font-bold text-green-600">{user.progress?.part2?.highScore || 0}</span>
@@ -450,23 +439,15 @@
             );
         }
 
-        // ==========================================
-        // QUIZ GAME ENGINE
-        // ==========================================
         function QuizGame({ questions, type, user, onBack }) {
-            // Game State
             const [currentQIndex, setCurrentQIndex] = useState(0);
             const [shuffledQuestions, setShuffledQuestions] = useState([]);
             const [score, setScore] = useState(0);
             const [streak, setStreak] = useState(0);
-            const [gameState, setGameState] = useState('ready'); // ready, playing, feedback, result
-            const [userAnswer, setUserAnswer] = useState("");
-            const [feedback, setFeedback] = useState(null); // { correct: bool, msg: string }
-            const [inputVal, setInputVal] = useState("");
+            const [gameState, setGameState] = useState('ready');
+            const [feedback, setFeedback] = useState(null);
 
-            // Setup Game
             useEffect(() => {
-                // Shuffle questions
                 const shuffled = [...questions].sort(() => 0.5 - Math.random());
                 setShuffledQuestions(shuffled);
                 setGameState('playing');
@@ -474,7 +455,6 @@
 
             const currentQ = shuffledQuestions[currentQIndex];
 
-            // Handle Answer Submission
             const submitAnswer = (ans) => {
                 if (gameState === 'feedback') return;
                 
@@ -490,9 +470,8 @@
                 });
                 
                 if (isCorrect) {
-                    setScore(s => s + 10 + (streak * 2)); // Bonus for streak
+                    setScore(s => s + 10 + (streak * 2));
                     setStreak(s => s + 1);
-                    // Play sound effect logic here if needed
                 } else {
                     setStreak(0);
                 }
@@ -502,7 +481,6 @@
 
             const nextQuestion = () => {
                 setFeedback(null);
-                setInputVal("");
                 if (currentQIndex + 1 >= shuffledQuestions.length) {
                     finishGame();
                 } else {
@@ -513,7 +491,6 @@
 
             const finishGame = async () => {
                 setGameState('result');
-                // Save Score to Firestore
                 try {
                     const docRef = window.doc(window.db, "users", user.email);
                     const currentHighScore = user.progress?.[type]?.highScore || 0;
@@ -537,10 +514,8 @@
 
             const normalize = (str) => String(str).replace(/\s/g, '').replace(/＋/g, '+').replace(/−/g, '-');
 
-            // Render Input (Part 1 vs Part 2)
             const renderInput = () => {
                 if (type === 'part1') {
-                    // Number pad logic for Part 1
                     const buttons = ["+1", "+2", "+3", "+4", "+5", "+6", "+7", "0", "-1", "-2", "-3", "-4"];
                     return (
                         <div className="grid grid-cols-4 gap-2 mt-4">
@@ -553,22 +528,14 @@
                         </div>
                     );
                 } else {
-                    // Multiple Choice or Input for Part 2? 
-                    // To keep it simple and robust on mobile, let's use generated options + correct answer
-                    // Generate distractors
                     const options = useMemo(() => {
                         if (!currentQ) return [];
-                        // Extract chemicals from equation
                         const parts = currentQ.eq.split(/\\to|\+|\s+/).filter(p => p.includes('\\text') && p.length > 5).map(p => p.replace(/^[0-9]+/, ''));
-                        // Clean parts
                         const cleanParts = [...new Set(parts.map(p => p.replace(/\\text\{([^}]+)\}.*/, '$1').replace(/_/g, '').replace(/[^a-zA-Z0-9]/g, '')))];
-                        // Ensure correct answer is in options even if parsing failed
                         const correct = currentQ.a;
                         let pool = [...cleanParts];
                         if (!pool.includes(correct)) pool.push(correct);
-                        // Add common distractors if few options
                         if (pool.length < 3) pool.push("H2O", "e-", "H+");
-                        
                         return pool.slice(0, 4).sort();
                     }, [currentQ]);
 
@@ -600,18 +567,13 @@
 
             return (
                 <div className="max-w-2xl mx-auto">
-                    {/* Header Info */}
                     <div className="flex justify-between items-center mb-4 text-sm font-bold text-gray-600">
                         <div>Q. {currentQIndex + 1} / {shuffledQuestions.length}</div>
                         <div>Score: {score}</div>
                     </div>
-
-                    {/* Progress Bar */}
                     <div className="w-full bg-gray-200 rounded-full h-2 mb-6">
                         <div className="bg-blue-600 h-2 rounded-full transition-all duration-300" style={{ width: `${((currentQIndex) / shuffledQuestions.length) * 100}%` }}></div>
                     </div>
-
-                    {/* Question Card */}
                     <Card className="mb-6 min-h-[200px] flex flex-col justify-center items-center text-center">
                         <div className="text-lg text-gray-500 mb-2">
                             {type === 'part1' ? `対象元素: ${currentQ.target}` : currentQ.q}
@@ -621,8 +583,6 @@
                         </div>
                         {type === 'part1' && <div className="text-sm text-gray-400">この原子の酸化数は？</div>}
                     </Card>
-
-                    {/* Input Area */}
                     {!feedback ? renderInput() : (
                         <div className={`p-4 rounded-lg border-2 text-center ${feedback.correct ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
                             <div className="text-xl font-bold mb-2">
@@ -639,9 +599,6 @@
             );
         }
 
-        // ==========================================
-        // ADMIN PANEL
-        // ==========================================
         function AdminPanel({ user, setView }) {
             const [csvText, setCsvText] = useState("");
             const [students, setStudents] = useState([]);
@@ -663,21 +620,18 @@
                 const lines = csvText.trim().split("\n");
                 let count = 0;
                 
-                // Expected format: email,name,grade,class,number
                 for (let line of lines) {
                     const [email, name, grade, cls, num] = line.split(",").map(s => s.trim());
                     if (!email || !email.includes("@")) continue;
 
                     try {
                         const docRef = window.doc(window.db, "users", email);
-                        // Check if exists to preserve progress
                         const snap = await window.getDoc(docRef);
                         if (!snap.exists()) {
                             await window.setDoc(docRef, {
                                 email, name, grade, class: cls, number: num, role: 'student', createdAt: window.serverTimestamp()
                             });
                         } else {
-                            // Update info but keep progress
                             await window.updateDoc(docRef, { name, grade, class: cls, number: num });
                         }
                         count++;
@@ -712,7 +666,6 @@
                         <Button onClick={() => setView('dashboard')} variant="outline">学生画面へ</Button>
                     </div>
 
-                    {/* CSV Upload Section */}
                     <Card>
                         <h3 className="font-bold mb-4 text-lg">📁 生徒一括登録 (CSV)</h3>
                         <p className="text-sm text-gray-500 mb-2">
@@ -731,7 +684,6 @@
                         </div>
                     </Card>
 
-                    {/* Student List & Export */}
                     <Card>
                         <div className="flex justify-between items-center mb-4">
                             <h3 className="font-bold text-lg">📊 学習状況一覧 ({students.length}名)</h3>
@@ -770,8 +722,17 @@
             );
         }
 
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
+        const mount = () => {
+            const root = ReactDOM.createRoot(document.getElementById('root'));
+            root.render(<App />);
+        };
+
+        // Wait for Firebase module to initialize
+        if (window.firebaseInitialized) {
+            mount();
+        } else {
+            window.addEventListener('firebase-ready', mount);
+        }
     </script>
 </body>
 </html>
